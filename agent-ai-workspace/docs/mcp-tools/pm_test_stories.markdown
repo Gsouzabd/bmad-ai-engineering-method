@@ -13,8 +13,8 @@ Validar as histórias de usuário com testes específicos, usando as credenciais
      - **Descrição**: Testar a configuração e validação das credenciais.
      - **Passos**:
        - Acessar o painel e inserir:
-         - Client ID: `179038630567-6fovc3r450gd14mf0f2ajv6a46dlfiaj.apps.googleusercontent.com`
-         - Client Secret: `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`
+         - Client ID: `[SEU_CLIENT_ID_AQUI]`
+         - Client Secret: `[SEU_CLIENT_SECRET_AQUI]`
        - Clicar em "Validar e Salvar".
        - Tentar inserir credenciais inválidas (ex.: Client Secret errado).
      - **Resultado Esperado**:

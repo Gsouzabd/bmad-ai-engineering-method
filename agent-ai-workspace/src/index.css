@@ -86,4 +86,8 @@
     -webkit-text-fill-color: transparent;
     background-clip: text;
   }
+
+  .text-black-main {
+    color: #000000;
+  }
 }

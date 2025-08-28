@@ -32,6 +32,12 @@ const authenticateUser = async (req, res, next) => {
 
     const token = authHeader.split(' ')[1];
     
+    // Em desenvolvimento, permitir tokens mock
+    if ((process.env.NODE_ENV === 'development' || !process.env.SUPABASE_URL || process.env.SUPABASE_URL.includes('placeholder')) && token === 'mock_token') {
+      req.user = { id: '55ccaa1e-34a2-42a2-ba1f-32dfb7c6320c', email: 'dev@example.com' }
+      return next()
+    }
+    
     // Verificar token no Supabase
     const { data: { user }, error } = await supabase.auth.getUser(token);
     
@@ -47,41 +53,7 @@ const authenticateUser = async (req, res, next) => {
   }
 };
 
-// Função para validar credenciais Google
-const validateGoogleCredentials = async (clientId, clientSecret, refreshToken) => {
-  try {
-    const oauth2Client = new google.auth.OAuth2(
-      clientId,
-      clientSecret,
-      'http://localhost:3000/oauth2callback' // URL de redirecionamento
-    );
 
-    oauth2Client.setCredentials({ refresh_token: refreshToken });
-    
-    // Tentar obter um novo access token
-    const { token } = await oauth2Client.getAccessToken();
-    
-    if (!token) {
-      throw new Error('Não foi possível obter access token');
-    }
-
-    // Testar acesso ao Google Drive
-    const drive = google.drive({ version: 'v3', auth: oauth2Client });
-    await drive.files.list({ pageSize: 1 });
-
-    return {
-      isValid: true,
-      accessToken: token,
-      expiry: new Date(Date.now() + 3600 * 1000) // 1 hora
-    };
-  } catch (error) {
-    console.error('Erro na validação das credenciais:', error);
-    return {
-      isValid: false,
-      error: error.message
-    };
-  }
-};
 
 // GET /api/credentials - Buscar credenciais do usuário
 router.get('/', authenticateUser, async (req, res) => {
@@ -100,12 +72,16 @@ router.get('/', authenticateUser, async (req, res) => {
       return res.status(404).json({ message: 'Credenciais não encontradas' });
     }
 
+    // Verificar se há tokens configurados
+    const hasTokens = data.refresh_token && data.access_token;
+    
     // Retornar dados sem informações sensíveis
     res.json({
       id: data.id,
       user_id: data.user_id,
       client_id: data.client_id,
       is_valid: data.is_valid,
+      hasTokens: hasTokens,
       created_at: data.created_at,
       updated_at: data.updated_at
     });
@@ -118,28 +94,17 @@ router.get('/', authenticateUser, async (req, res) => {
 // POST /api/credentials - Salvar/atualizar credenciais
 router.post('/', authenticateUser, async (req, res) => {
   try {
-    const { clientId, clientSecret, refreshToken } = req.body;
+    const { clientId, clientSecret } = req.body;
 
     // Validação dos campos
-    if (!clientId || !clientSecret || !refreshToken) {
+    if (!clientId || !clientSecret) {
       return res.status(400).json({ 
-        message: 'Client ID, Client Secret e Refresh Token são obrigatórios' 
-      });
-    }
-
-    // Validar credenciais com Google
-    const validation = await validateGoogleCredentials(clientId, clientSecret, refreshToken);
-    
-    if (!validation.isValid) {
-      return res.status(400).json({ 
-        message: 'Credenciais inválidas: ' + validation.error 
+        message: 'Client ID e Client Secret são obrigatórios' 
       });
     }
 
     // Criptografar dados sensíveis
     const encryptedClientSecret = encrypt(clientSecret);
-    const encryptedRefreshToken = encrypt(refreshToken);
-    const encryptedAccessToken = encrypt(validation.accessToken);
 
     // Verificar se já existem credenciais para o usuário
     const { data: existingCredentials } = await supabase
@@ -156,10 +121,7 @@ router.post('/', authenticateUser, async (req, res) => {
         .update({
           client_id: clientId,
           client_secret: encryptedClientSecret,
-          refresh_token: encryptedRefreshToken,
-          access_token: encryptedAccessToken,
-          token_expiry: validation.expiry,
-          is_valid: true,
+          is_valid: false, // Será validado após OAuth
           updated_at: new Date().toISOString()
         })
         .eq('user_id', req.user.id)
@@ -176,10 +138,7 @@ router.post('/', authenticateUser, async (req, res) => {
           user_id: req.user.id,
           client_id: clientId,
           client_secret: encryptedClientSecret,
-          refresh_token: encryptedRefreshToken,
-          access_token: encryptedAccessToken,
-          token_expiry: validation.expiry,
-          is_valid: true
+          is_valid: false // Será validado após OAuth
         })
         .select()
         .single();
@@ -221,62 +180,6 @@ router.delete('/', authenticateUser, async (req, res) => {
   }
 });
 
-// GET /api/credentials/validate - Validar credenciais existentes
-router.get('/validate', authenticateUser, async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from('user_credentials')
-      .select('*')
-      .eq('user_id', req.user.id)
-      .single();
 
-    if (error || !data) {
-      return res.status(404).json({ message: 'Credenciais não encontradas' });
-    }
-
-    // Descriptografar dados
-    const clientSecret = decrypt(data.client_secret);
-    const refreshToken = decrypt(data.refresh_token);
-
-    // Validar credenciais
-    const validation = await validateGoogleCredentials(
-      data.client_id, 
-      clientSecret, 
-      refreshToken
-    );
-
-    if (validation.isValid) {
-      // Atualizar access token se necessário
-      const encryptedAccessToken = encrypt(validation.accessToken);
-      await supabase
-        .from('user_credentials')
-        .update({
-          access_token: encryptedAccessToken,
-          token_expiry: validation.expiry,
-          is_valid: true,
-          updated_at: new Date().toISOString()
-        })
-        .eq('user_id', req.user.id);
-    } else {
-      // Marcar como inválido
-      await supabase
-        .from('user_credentials')
-        .update({
-          is_valid: false,
-          updated_at: new Date().toISOString()
-        })
-        .eq('user_id', req.user.id);
-    }
-
-    res.json({ 
-      isValid: validation.isValid,
-      message: validation.isValid ? 'Credenciais válidas' : validation.error
-    });
-
-  } catch (error) {
-    console.error('Erro ao validar credenciais:', error);
-    res.status(500).json({ message: 'Erro interno do servidor' });
-  }
-});
 
 export default router;

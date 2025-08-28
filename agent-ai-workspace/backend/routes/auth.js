@@ -111,6 +111,16 @@ router.post('/register', async (req, res) => {
   }
 })
 
+// Verificar usuário atual
+router.get('/me', authenticateToken, async (req, res) => {
+  try {
+    res.json({ user: req.user })
+  } catch (error) {
+    console.error('Erro ao verificar usuário:', error)
+    res.status(500).json({ error: 'Erro interno do servidor' })
+  }
+})
+
 // Logout
 router.post('/logout', authenticateToken, async (req, res) => {
   try {

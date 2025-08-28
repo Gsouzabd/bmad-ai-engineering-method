@@ -10,7 +10,7 @@ import OpenAI from 'openai'
 
 // Configurar OpenAI
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY || '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'
+  apiKey: process.env.OPENAI_API_KEY || 'sua_openai_api_key_aqui'
 })
 
 // Importar bibliotecas para extração de texto (lazy loading)

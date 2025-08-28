@@ -7,8 +7,8 @@ Testar a integração do backend com servidores MCP e as credenciais fornecidas,
 
 ### Configuração
 - **Credenciais**:
-  - Client ID: `179038630567-6fovc3r450gd14mf0f2ajv6a46dlfiaj.apps.googleusercontent.com`
-  - Client Secret: `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`
+  - Client ID: `[SEU_CLIENT_ID_AQUI]`
+  - Client Secret: `[SEU_CLIENT_SECRET_AQUI]`
 - **Servidores MCP**:
   - `@modelcontextprotocol/server-gdrive`
   - `@mcp/server-sheets`
@@ -21,8 +21,8 @@ Testar a integração do backend com servidores MCP e as credenciais fornecidas,
    - **Passos**:
      - Configurar variáveis de ambiente:
        ```bash
-       export GOOGLE_CLIENT_ID="179038630567-6fovc3r450gd14mf0f2ajv6a46dlfiaj.apps.googleusercontent.com"
-       export GOOGLE_CLIENT_SECRET="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"
+       export GOOGLE_CLIENT_ID="[SEU_CLIENT_ID_AQUI]"
+       export GOOGLE_CLIENT_SECRET="[SEU_CLIENT_SECRET_AQUI]"
        export GOOGLE_REDIRECT_URI="http://localhost:3000/oauth2callback"
        ```
      - Executar validação:

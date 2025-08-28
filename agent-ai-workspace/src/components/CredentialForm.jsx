@@ -5,8 +5,7 @@ import toast from 'react-hot-toast';
 const CredentialForm = ({ onSubmit, loading = false }) => {
   const [formData, setFormData] = useState({
     clientId: '',
-    clientSecret: '',
-    refreshToken: ''
+    clientSecret: ''
   });
   const [showSecrets, setShowSecrets] = useState(false);
   const [validationStatus, setValidationStatus] = useState(null); // 'success', 'error', null
@@ -26,7 +25,7 @@ const CredentialForm = ({ onSubmit, loading = false }) => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     
-    if (!formData.clientId || !formData.clientSecret || !formData.refreshToken) {
+    if (!formData.clientId || !formData.clientSecret) {
       toast.error('Por favor, preencha todos os campos');
       return;
     }
@@ -92,7 +91,7 @@ const CredentialForm = ({ onSubmit, loading = false }) => {
              type="text"
              id="clientId"
              name="clientId"
-             placeholder="179038630567-6fovc3r450gd14mf0f2ajv6a46dlfiaj.apps.googleusercontent.com"
+             placeholder="[SEU_CLIENT_ID_AQUI]"
              value={formData.clientId}
              onChange={handleInputChange}
              className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
@@ -106,16 +105,17 @@ const CredentialForm = ({ onSubmit, loading = false }) => {
             Client Secret
           </label>
           <div className="relative">
-            <input
-              type={showSecrets ? "text" : "password"}
-              id="clientSecret"
-              name="clientSecret"
-              placeholder="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"
-              value={formData.clientSecret}
-              onChange={handleInputChange}
-              className="w-full border border-gray-300 rounded-md px-3 py-2 pr-10 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              disabled={loading}
-            />
+                         <input
+               type={showSecrets ? "text" : "password"}
+               id="clientSecret"
+               name="clientSecret"
+               placeholder="[SEU_CLIENT_SECRET_AQUI]"
+               value={formData.clientSecret}
+               onChange={handleInputChange}
+               className="w-full border border-gray-300 rounded-md px-3 py-2 pr-10 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
+               disabled={loading}
+               style={{ color: 'black' }}
+             />
             <button
               type="button"
               onClick={toggleShowSecrets}
@@ -127,31 +127,7 @@ const CredentialForm = ({ onSubmit, loading = false }) => {
           </div>
         </div>
 
-        <div>
-          <label htmlFor="refreshToken" className="block text-sm font-medium text-gray-700 mb-1">
-            Refresh Token
-          </label>
-          <div className="relative">
-            <input
-              type={showSecrets ? "text" : "password"}
-              id="refreshToken"
-              name="refreshToken"
-              placeholder="1//04dX..."
-              value={formData.refreshToken}
-              onChange={handleInputChange}
-              className="w-full border border-gray-300 rounded-md px-3 py-2 pr-10 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              disabled={loading}
-            />
-            <button
-              type="button"
-              onClick={toggleShowSecrets}
-              className="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
-              disabled={loading}
-            >
-              {showSecrets ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-            </button>
-          </div>
-        </div>
+        
 
         <button
           type="submit"
@@ -167,18 +143,18 @@ const CredentialForm = ({ onSubmit, loading = false }) => {
         </button>
       </form>
 
-      <div className="mt-4 p-3 bg-blue-50 rounded-md">
-        <p className="text-sm text-blue-700">
-          <strong>Como obter as credenciais:</strong>
-        </p>
-        <ol className="text-sm text-blue-600 mt-2 list-decimal list-inside space-y-1">
-          <li>Acesse o Google Cloud Console</li>
-          <li>Crie um projeto e habilite as APIs do Google Drive e Sheets</li>
-          <li>Configure as credenciais OAuth 2.0</li>
-          <li>Use o Client ID e Client Secret gerados</li>
-          <li>Obtenha o Refresh Token através do fluxo OAuth</li>
-        </ol>
-      </div>
+             <div className="mt-4 p-3 bg-blue-50 rounded-md">
+         <p className="text-sm text-blue-700">
+           <strong>Como obter as credenciais:</strong>
+         </p>
+         <ol className="text-sm text-blue-600 mt-2 list-decimal list-inside space-y-1">
+           <li>Acesse o Google Cloud Console</li>
+           <li>Crie um projeto e habilite as APIs do Google Drive e Sheets</li>
+           <li>Configure as credenciais OAuth 2.0</li>
+           <li>Use o Client ID e Client Secret gerados</li>
+           <li>Configure a URL de redirecionamento: <code className="bg-gray-100 px-1 rounded">http://localhost:5000/api/oauth/callback</code></li>
+         </ol>
+       </div>
     </div>
   );
 };

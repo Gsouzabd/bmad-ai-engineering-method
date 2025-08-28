@@ -15,10 +15,10 @@ CREATE TABLE IF NOT EXISTS user_credentials (
   user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
   client_id VARCHAR(255) NOT NULL,
   client_secret TEXT NOT NULL,
-  refresh_token TEXT NOT NULL,
-  access_token TEXT,
+  refresh_token TEXT, -- Permite NULL (será preenchido após OAuth)
+  access_token TEXT, -- Permite NULL (será preenchido após OAuth)
   token_expiry TIMESTAMP WITH TIME ZONE,
-  is_valid BOOLEAN DEFAULT true,
+  is_valid BOOLEAN DEFAULT false, -- Começa como false até OAuth ser completado
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   UNIQUE(user_id)
