@@ -1,0 +1,89 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+  
+  body {
+    @apply bg-dark-primary text-dark-primary;
+    background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 100%);
+    min-height: 100vh;
+  }
+
+  /* Scrollbar personalizada para dark mode */
+  ::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-dark-secondary;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-dark-border rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-dark-border-light;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-primary-600 hover:bg-primary-700 text-white font-medium py-2 px-4 rounded-lg transition-all duration-200 shadow-lg hover:shadow-xl transform hover:-translate-y-0.5;
+  }
+  
+  .btn-secondary {
+    @apply bg-dark-tertiary hover:bg-dark-border text-dark-secondary font-medium py-2 px-4 rounded-lg transition-all duration-200 border border-dark-border hover:border-dark-border-light;
+  }
+  
+  .btn-danger {
+    @apply bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg transition-all duration-200 shadow-lg hover:shadow-xl;
+  }
+
+  .btn-ghost {
+    @apply bg-transparent hover:bg-dark-tertiary text-dark-secondary hover:text-dark-primary font-medium py-2 px-4 rounded-lg transition-all duration-200;
+  }
+  
+  .input-field {
+    @apply w-full px-3 py-2 bg-dark-secondary border border-dark-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-dark-primary placeholder-dark-muted transition-all duration-200;
+  }
+
+  .input-field:focus {
+    @apply bg-dark-tertiary;
+  }
+  
+  .card {
+    @apply bg-dark-card rounded-xl shadow-xl border border-dark-border p-6 backdrop-blur-sm bg-opacity-50;
+  }
+
+  .card-hover {
+    @apply hover:shadow-2xl hover:border-dark-border-light transition-all duration-300 transform hover:-translate-y-1;
+  }
+  
+  .sidebar {
+    @apply bg-dark-secondary border-r border-dark-border w-64 min-h-screen backdrop-blur-sm bg-opacity-50;
+  }
+
+  .glass-effect {
+    @apply backdrop-blur-md bg-opacity-20 border border-white/10;
+  }
+
+  .gradient-bg {
+    background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 50%, #16213e 100%);
+  }
+
+  .gradient-card {
+    background: linear-gradient(135deg, rgba(30, 30, 46, 0.8) 0%, rgba(26, 26, 46, 0.6) 100%);
+  }
+
+  .text-gradient {
+    background: linear-gradient(135deg, #a855f7 0%, #9333ea 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+}

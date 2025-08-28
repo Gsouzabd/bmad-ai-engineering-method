@@ -1,0 +1,430 @@
+-- =====================================================
+-- RESET COMPLETO DO BANCO DE DADOS
+-- =====================================================
+
+-- ⚠️ ATENÇÃO: Este script irá DELETAR TODOS os dados existentes!
+-- Execute apenas se você tem certeza de que quer começar do zero.
+
+-- =====================================================
+-- 1. LIMPEZA COMPLETA
+-- =====================================================
+
+-- Desabilitar RLS temporariamente para permitir limpeza
+ALTER TABLE IF EXISTS agents DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS knowledge_base DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS knowledge_chunks DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS conversations DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS messages DISABLE ROW LEVEL SECURITY;
+
+-- Remover todos os triggers
+DROP TRIGGER IF EXISTS update_agents_updated_at ON agents;
+DROP TRIGGER IF EXISTS update_conversations_updated_at ON conversations;
+
+-- Remover todas as funções
+DROP FUNCTION IF EXISTS update_updated_at_column();
+DROP FUNCTION IF EXISTS match_chunks(vector, float, int, uuid, uuid);
+DROP FUNCTION IF EXISTS match_chunks(vector(3072), float, int, uuid, uuid);
+DROP FUNCTION IF EXISTS match_chunks(vector(1536), float, int, uuid, uuid);
+
+-- Remover todos os índices
+DROP INDEX IF EXISTS idx_knowledge_chunks_embedding;
+DROP INDEX IF EXISTS idx_knowledge_chunks_embedding_simple;
+DROP INDEX IF EXISTS idx_agents_user_id;
+DROP INDEX IF EXISTS idx_agents_created_at;
+DROP INDEX IF EXISTS idx_knowledge_base_agent_id;
+DROP INDEX IF EXISTS idx_knowledge_base_user_id;
+DROP INDEX IF EXISTS idx_knowledge_chunks_agent_id;
+DROP INDEX IF EXISTS idx_knowledge_chunks_user_id;
+DROP INDEX IF EXISTS idx_knowledge_chunks_file_id;
+DROP INDEX IF EXISTS idx_conversations_agent_id;
+DROP INDEX IF EXISTS idx_conversations_user_id;
+DROP INDEX IF EXISTS idx_conversations_updated_at;
+DROP INDEX IF EXISTS idx_messages_conversation_id;
+DROP INDEX IF EXISTS idx_messages_created_at;
+
+-- Remover todas as políticas RLS
+DROP POLICY IF EXISTS "Users can view their own agents" ON agents;
+DROP POLICY IF EXISTS "Users can insert their own agents" ON agents;
+DROP POLICY IF EXISTS "Users can update their own agents" ON agents;
+DROP POLICY IF EXISTS "Users can delete their own agents" ON agents;
+
+DROP POLICY IF EXISTS "Users can view their own knowledge base" ON knowledge_base;
+DROP POLICY IF EXISTS "Users can insert their own knowledge base" ON knowledge_base;
+DROP POLICY IF EXISTS "Users can update their own knowledge base" ON knowledge_base;
+DROP POLICY IF EXISTS "Users can delete their own knowledge base" ON knowledge_base;
+
+DROP POLICY IF EXISTS "Users can view their own knowledge chunks" ON knowledge_chunks;
+DROP POLICY IF EXISTS "Users can insert their own knowledge chunks" ON knowledge_chunks;
+DROP POLICY IF EXISTS "Users can update their own knowledge chunks" ON knowledge_chunks;
+DROP POLICY IF EXISTS "Users can delete their own knowledge chunks" ON knowledge_chunks;
+
+DROP POLICY IF EXISTS "Users can view their own conversations" ON conversations;
+DROP POLICY IF EXISTS "Users can insert their own conversations" ON conversations;
+DROP POLICY IF EXISTS "Users can update their own conversations" ON conversations;
+DROP POLICY IF EXISTS "Users can delete their own conversations" ON conversations;
+
+DROP POLICY IF EXISTS "Users can view messages from their conversations" ON messages;
+DROP POLICY IF EXISTS "Users can insert messages to their conversations" ON messages;
+DROP POLICY IF EXISTS "Users can update messages from their conversations" ON messages;
+DROP POLICY IF EXISTS "Users can delete messages from their conversations" ON messages;
+
+-- Deletar todas as tabelas (em ordem de dependência)
+DROP TABLE IF EXISTS messages CASCADE;
+DROP TABLE IF EXISTS conversations CASCADE;
+DROP TABLE IF EXISTS knowledge_chunks CASCADE;
+DROP TABLE IF EXISTS knowledge_base CASCADE;
+DROP TABLE IF EXISTS agents CASCADE;
+
+-- =====================================================
+-- 2. VERIFICAÇÃO DE LIMPEZA
+-- =====================================================
+
+SELECT 'Verificando limpeza...' as status;
+
+-- Verificar se as tabelas foram removidas
+SELECT 'Tabelas restantes:' as info;
+SELECT table_name 
+FROM information_schema.tables 
+WHERE table_name IN ('agents', 'knowledge_base', 'knowledge_chunks', 'conversations', 'messages')
+AND table_schema = 'public';
+
+-- Verificar se as funções foram removidas
+SELECT 'Funções restantes:' as info;
+SELECT routine_name 
+FROM information_schema.routines 
+WHERE routine_name IN ('update_updated_at_column', 'match_chunks')
+AND routine_schema = 'public';
+
+-- Verificar se os triggers foram removidos
+SELECT 'Triggers restantes:' as info;
+SELECT trigger_name 
+FROM information_schema.triggers 
+WHERE trigger_name IN ('update_agents_updated_at', 'update_conversations_updated_at');
+
+-- Verificar se os índices foram removidos
+SELECT 'Índices restantes:' as info;
+SELECT indexname 
+FROM pg_indexes 
+WHERE tablename IN ('agents', 'knowledge_base', 'knowledge_chunks', 'conversations', 'messages');
+
+-- =====================================================
+-- 3. EXECUTAR SCHEMA COMPLETO
+-- =====================================================
+
+SELECT 'Executando schema completo...' as status;
+
+-- Habilitar extensões necessárias
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "vector";
+
+-- =====================================================
+-- TABELAS PRINCIPAIS
+-- =====================================================
+
+-- Tabela de agentes
+CREATE TABLE agents (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  name VARCHAR(50) NOT NULL,
+  description TEXT,
+  prompt TEXT,
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Tabela de arquivos da base de conhecimento
+CREATE TABLE knowledge_base (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  agent_id UUID REFERENCES agents(id) ON DELETE CASCADE,
+  file_name VARCHAR(255) NOT NULL,
+  file_size INTEGER NOT NULL,
+  file_type VARCHAR(50) NOT NULL,
+  file_url TEXT NOT NULL,
+  extracted_text TEXT,
+  chunks_count INTEGER DEFAULT 0,
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Tabela de chunks da base de conhecimento (para RAG)
+CREATE TABLE knowledge_chunks (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  agent_id UUID REFERENCES agents(id) ON DELETE CASCADE,
+  file_id UUID REFERENCES knowledge_base(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  chunk_index INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  embedding vector(3072), -- OpenAI text-embedding-3-large tem 3072 dimensões
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Tabela de conversas
+CREATE TABLE conversations (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  agent_id UUID REFERENCES agents(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  title VARCHAR(255),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Tabela de mensagens
+CREATE TABLE messages (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+  content TEXT NOT NULL,
+  role VARCHAR(10) NOT NULL CHECK (role IN ('user', 'assistant')),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- =====================================================
+-- ÍNDICES PARA PERFORMANCE
+-- =====================================================
+
+-- Índices para agents
+CREATE INDEX idx_agents_user_id ON agents(user_id);
+CREATE INDEX idx_agents_created_at ON agents(created_at DESC);
+
+-- Índices para knowledge_base
+CREATE INDEX idx_knowledge_base_agent_id ON knowledge_base(agent_id);
+CREATE INDEX idx_knowledge_base_user_id ON knowledge_base(user_id);
+
+-- Índices para knowledge_chunks
+CREATE INDEX idx_knowledge_chunks_agent_id ON knowledge_chunks(agent_id);
+CREATE INDEX idx_knowledge_chunks_user_id ON knowledge_chunks(user_id);
+CREATE INDEX idx_knowledge_chunks_file_id ON knowledge_chunks(file_id);
+
+-- Tentar criar índice HNSW para embeddings de alta dimensionalidade
+DO $$
+BEGIN
+    CREATE INDEX idx_knowledge_chunks_embedding 
+    ON knowledge_chunks 
+    USING hnsw (embedding vector_cosine_ops) 
+    WITH (m = 16, ef_construction = 64);
+    RAISE NOTICE 'Índice HNSW criado com sucesso';
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'HNSW não disponível, usando ivfflat como fallback';
+    -- Se HNSW falhar, não criar índice por enquanto
+    -- O sistema funcionará sem o índice vetorial
+END $$;
+
+-- Índices para conversations
+CREATE INDEX idx_conversations_agent_id ON conversations(agent_id);
+CREATE INDEX idx_conversations_user_id ON conversations(user_id);
+CREATE INDEX idx_conversations_updated_at ON conversations(updated_at DESC);
+
+-- Índices para messages
+CREATE INDEX idx_messages_conversation_id ON messages(conversation_id);
+CREATE INDEX idx_messages_created_at ON messages(created_at);
+
+-- =====================================================
+-- FUNÇÕES E TRIGGERS
+-- =====================================================
+
+-- Função para atualizar updated_at automaticamente
+CREATE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+-- Triggers para atualizar updated_at
+CREATE TRIGGER update_agents_updated_at 
+    BEFORE UPDATE ON agents 
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_conversations_updated_at 
+    BEFORE UPDATE ON conversations 
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Função para busca vetorial de chunks
+CREATE FUNCTION match_chunks(
+  query_embedding vector(3072),
+  match_threshold float,
+  match_count int,
+  agent_id_param uuid,
+  user_id_param uuid
+)
+RETURNS TABLE (
+  id uuid,
+  content text,
+  similarity float,
+  file_name text
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  RETURN QUERY
+  SELECT 
+    kc.id,
+    kc.content,
+    1 - (kc.embedding <=> query_embedding) as similarity,
+    kb.file_name
+  FROM knowledge_chunks kc
+  JOIN knowledge_base kb ON kc.file_id = kb.id
+  WHERE 
+    kc.agent_id = agent_id_param 
+    AND kc.user_id = user_id_param
+    AND 1 - (kc.embedding <=> query_embedding) > match_threshold
+  ORDER BY kc.embedding <=> query_embedding
+  LIMIT match_count;
+END;
+$$;
+
+-- =====================================================
+-- ROW LEVEL SECURITY (RLS)
+-- =====================================================
+
+-- Habilitar RLS em todas as tabelas
+ALTER TABLE agents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE knowledge_base ENABLE ROW LEVEL SECURITY;
+ALTER TABLE knowledge_chunks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE conversations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
+
+-- =====================================================
+-- POLÍTICAS DE SEGURANÇA
+-- =====================================================
+
+-- Políticas para agents
+CREATE POLICY "Users can view their own agents" ON agents
+  FOR SELECT USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can insert their own agents" ON agents
+  FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can update their own agents" ON agents
+  FOR UPDATE USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can delete their own agents" ON agents
+  FOR DELETE USING (auth.uid() = user_id);
+
+-- Políticas para knowledge_base
+CREATE POLICY "Users can view their own knowledge base" ON knowledge_base
+  FOR SELECT USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can insert their own knowledge base" ON knowledge_base
+  FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can update their own knowledge base" ON knowledge_base
+  FOR UPDATE USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can delete their own knowledge base" ON knowledge_base
+  FOR DELETE USING (auth.uid() = user_id);
+
+-- Políticas para knowledge_chunks
+CREATE POLICY "Users can view their own knowledge chunks" ON knowledge_chunks
+  FOR SELECT USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can insert their own knowledge chunks" ON knowledge_chunks
+  FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can update their own knowledge chunks" ON knowledge_chunks
+  FOR UPDATE USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can delete their own knowledge chunks" ON knowledge_chunks
+  FOR DELETE USING (auth.uid() = user_id);
+
+-- Políticas para conversations
+CREATE POLICY "Users can view their own conversations" ON conversations
+  FOR SELECT USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can insert their own conversations" ON conversations
+  FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can update their own conversations" ON conversations
+  FOR UPDATE USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can delete their own conversations" ON conversations
+  FOR DELETE USING (auth.uid() = user_id);
+
+-- Políticas para messages
+CREATE POLICY "Users can view messages from their conversations" ON messages
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1 FROM conversations 
+      WHERE conversations.id = messages.conversation_id 
+      AND conversations.user_id = auth.uid()
+    )
+  );
+
+CREATE POLICY "Users can insert messages to their conversations" ON messages
+  FOR INSERT WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM conversations 
+      WHERE conversations.id = messages.conversation_id 
+      AND conversations.user_id = auth.uid()
+    )
+  );
+
+CREATE POLICY "Users can update messages from their conversations" ON messages
+  FOR UPDATE USING (
+    EXISTS (
+      SELECT 1 FROM conversations 
+      WHERE conversations.id = messages.conversation_id 
+      AND conversations.user_id = auth.uid()
+    )
+  );
+
+CREATE POLICY "Users can delete messages from their conversations" ON messages
+  FOR DELETE USING (
+    EXISTS (
+      SELECT 1 FROM conversations 
+      WHERE conversations.id = messages.conversation_id 
+      AND conversations.user_id = auth.uid()
+    )
+  );
+
+-- =====================================================
+-- VERIFICAÇÕES FINAIS
+-- =====================================================
+
+SELECT 'RESET CONCLUÍDO COM SUCESSO!' as status;
+
+-- Verificar se as tabelas foram criadas
+SELECT 'Tabelas criadas:' as info;
+SELECT 'agents' as table_name, COUNT(*) as row_count FROM agents
+UNION ALL
+SELECT 'knowledge_base' as table_name, COUNT(*) as row_count FROM knowledge_base
+UNION ALL
+SELECT 'knowledge_chunks' as table_name, COUNT(*) as row_count FROM knowledge_chunks
+UNION ALL
+SELECT 'conversations' as table_name, COUNT(*) as row_count FROM conversations
+UNION ALL
+SELECT 'messages' as table_name, COUNT(*) as row_count FROM messages;
+
+-- Verificar se as políticas estão ativas
+SELECT 'Políticas RLS criadas:' as info;
+SELECT schemaname, tablename, policyname, permissive, roles, cmd, qual 
+FROM pg_policies 
+WHERE tablename IN ('agents', 'knowledge_base', 'knowledge_chunks', 'conversations', 'messages')
+ORDER BY tablename, policyname;
+
+-- Verificar se as funções foram criadas
+SELECT 'Funções criadas:' as info;
+SELECT routine_name, routine_type FROM information_schema.routines 
+WHERE routine_name IN ('update_updated_at_column', 'match_chunks')
+ORDER BY routine_name;
+
+-- Verificar se os triggers foram criados
+SELECT 'Triggers criados:' as info;
+SELECT 
+    trigger_name,
+    event_manipulation,
+    event_object_table
+FROM information_schema.triggers 
+WHERE trigger_name IN ('update_agents_updated_at', 'update_conversations_updated_at')
+ORDER BY trigger_name;
+
+-- Verificar se os índices foram criados
+SELECT 'Índices criados:' as info;
+SELECT 
+    indexname,
+    indexdef
+FROM pg_indexes 
+WHERE tablename IN ('agents', 'knowledge_base', 'knowledge_chunks', 'conversations', 'messages')
+ORDER BY tablename, indexname;
+
+SELECT 'Banco de dados resetado e configurado com sucesso!' as final_status;
