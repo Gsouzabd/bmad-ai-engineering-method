@@ -2,9 +2,23 @@ import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { useAgents } from '../contexts/AgentContext'
-import { Send, ArrowLeft, MessageSquare, Trash2, Plus, Loader2 } from 'lucide-react'
+import { ArrowLeft, MessageSquare, Trash2, Plus, Loader2, Bot, Settings, Menu } from 'lucide-react'
 import toast from 'react-hot-toast'
 import PermissionModal from '../components/PermissionModal'
+import ToolsExecutionHistory from '../components/ToolsExecutionHistory'
+import ToolsSummary from '../components/ToolsSummary'
+import { 
+  Conversation, 
+  ConversationContent, 
+  ConversationScrollButton
+} from '../components/conversation'
+import { 
+  Message, 
+  MessageContent
+} from '../components/message'
+import { Button } from '../components/ui/button'
+import { Card, CardContent } from '../components/ui/card'
+import { Badge } from '../components/ui/badge'
 
 const Chat = () => {
   const { id: agentId } = useParams()
@@ -20,6 +34,7 @@ const Chat = () => {
   const [currentConversationId, setCurrentConversationId] = useState(null)
   const [loadingConversations, setLoadingConversations] = useState(true)
   const [sendingMessage, setSendingMessage] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(true)
   
   // Estados para MCP
   const [permissionModal, setPermissionModal] = useState({
@@ -30,6 +45,10 @@ const Chat = () => {
     onDecline: null
   })
   const [pendingToolExecution, setPendingToolExecution] = useState(null)
+  const [toolsExecution, setToolsExecution] = useState({
+    isVisible: false,
+    tools: []
+  })
   
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
@@ -90,11 +109,11 @@ const Chat = () => {
   const fetchMessages = async (conversationId) => {
     try {
       setLoading(true)
-             const response = await fetch(`/api/chat/conversations/${conversationId}/messages`, {
-         headers: {
-           'Authorization': `Bearer ${getStoredToken()}`
-         }
-       })
+      const response = await fetch(`/api/chat/conversations/${conversationId}/messages`, {
+        headers: {
+          'Authorization': `Bearer ${getStoredToken()}`
+        }
+      })
 
       if (response.ok) {
         const data = await response.json()
@@ -132,12 +151,12 @@ const Chat = () => {
     }
 
     try {
-             const response = await fetch(`/api/chat/conversations/${conversationId}`, {
-         method: 'DELETE',
-         headers: {
-           'Authorization': `Bearer ${getStoredToken()}`
-         }
-       })
+      const response = await fetch(`/api/chat/conversations/${conversationId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${getStoredToken()}`
+        }
+      })
 
       if (response.ok) {
         toast.success('Conversa deletada com sucesso')
@@ -247,7 +266,7 @@ const Chat = () => {
 
     // Adicionar mensagem do usuário imediatamente
     const userMessage = {
-      id: Date.now().toString(),
+      id: `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       content: messageToSend,
       role: 'user',
       created_at: new Date().toISOString()
@@ -256,47 +275,219 @@ const Chat = () => {
     setMessages(prev => [...prev, userMessage])
 
     try {
-      // Primeiro, interpretar o comando para ver se precisa de tool MCP
-      const interpretation = await interpretMCPCommand(messageToSend)
-      
-      if (interpretation.action === 'tool') {
-        // Solicitar permissão do usuário
-        const permissionGranted = await requestPermission(
-          interpretation.tool,
-          interpretation.toolDescription,
-          interpretation.params
-        )
+      // Mostrar indicador de ferramentas (manter ferramentas anteriores temporariamente)
+      setToolsExecution(prev => ({
+        isVisible: true,
+        tools: [] // Resetar apenas para a nova execução - ferramentas serão salvas na mensagem
+      }))
 
-        if (permissionGranted) {
-          // Executar tool
-          const toolResult = await executeMCPTool(
-            interpretation.tool,
-            interpretation.toolDescription,
-            interpretation.params
-          )
+      // Função híbrida: SSE para ferramentas + POST para resposta
+      const hybridProcessing = async () => {
+        console.log('🔄 Usando processamento híbrido: SSE + POST tradicional')
+        
+        // Gerar sessionId único para esta conversa
+        const sessionId = `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+        console.log(`📡 SessionId gerado: ${sessionId}`)
+        
+        // Conectar ao SSE para notificações de ferramentas
+        let toolEventSource = null
+        try {
+          toolEventSource = new EventSource(`/api/chat/${agentId}/tools-stream/${sessionId}`)
+          
+          toolEventSource.addEventListener('connected', (event) => {
+            console.log('🔗 SSE conectado para ferramentas')
+          })
+          
+          toolEventSource.addEventListener('tools_requested', (event) => {
+            const data = JSON.parse(event.data)
+            console.log(`🔧 ${data.count} ferramenta(s) solicitada(s):`, data.tools)
+          })
+          
+          toolEventSource.addEventListener('tool_start', (event) => {
+            const data = JSON.parse(event.data)
+            console.log(`🔧 Iniciando: ${data.displayName}`)
+            
+            // Atualizar estado das ferramentas
+            setToolsExecution(prev => {
+              // Verificar se a ferramenta já existe (para evitar duplicatas)
+              const existingTool = prev.tools.find(tool => tool.name === data.name)
+              
+              if (existingTool) {
+                // Atualizar ferramenta existente
+                return {
+                  isVisible: true,
+                  tools: prev.tools.map(tool => 
+                    tool.name === data.name 
+                      ? { ...tool, status: 'executing', args: data.args }
+                      : tool
+                  )
+                }
+              } else {
+                // Adicionar nova ferramenta
+                const newTools = [...prev.tools, {
+                  name: data.name,
+                  displayName: data.displayName,
+                  description: data.description,
+                  status: 'executing',
+                  args: data.args,
+                  isAdditional: data.isAdditional || false
+                }]
+                console.log('🔧 Estado após tool_start (nova ferramenta):', newTools)
+                return {
+                  isVisible: true,
+                  tools: newTools
+                }
+              }
+            })
+          })
+          
+          toolEventSource.addEventListener('tool_success', (event) => {
+            const data = JSON.parse(event.data)
+            console.log(`✅ Concluído: ${data.displayName}`)
+            
+            // Atualizar status da ferramenta
+            setToolsExecution(prev => {
+              const existingTool = prev.tools.find(tool => tool.name === data.name)
+              
+              if (existingTool) {
+                // Atualizar ferramenta existente
+                const updatedTools = prev.tools.map(tool => 
+                  tool.name === data.name 
+                    ? { ...tool, status: 'success', result: data.result }
+                    : tool
+                )
+                console.log('✅ Estado após tool_success:', updatedTools)
+                return {
+                  ...prev,
+                  tools: updatedTools
+                }
+              } else {
+                // Se a ferramenta não existe (situação rara), criar e marcar como sucesso
+                console.warn(`⚠️ Ferramenta ${data.name} não encontrada, criando...`)
+                return {
+                  ...prev,
+                  tools: [...prev.tools, {
+                    name: data.name,
+                    displayName: data.displayName,
+                    description: `Ferramenta executada`,
+                    status: 'success',
+                    result: data.result,
+                    isAdditional: data.isAdditional || false
+                  }]
+                }
+              }
+            })
+          })
+          
+          toolEventSource.addEventListener('tool_error', (event) => {
+            const data = JSON.parse(event.data)
+            console.log(`❌ Erro: ${data.displayName}`)
+            
+            // Atualizar status da ferramenta
+            setToolsExecution(prev => {
+              const existingTool = prev.tools.find(tool => tool.name === data.name)
+              
+              if (existingTool) {
+                // Atualizar ferramenta existente
+                return {
+                  ...prev,
+                  tools: prev.tools.map(tool => 
+                    tool.name === data.name 
+                      ? { ...tool, status: 'error', error: data.error }
+                      : tool
+                  )
+                }
+              } else {
+                // Se a ferramenta não existe, criar e marcar como erro
+                console.warn(`⚠️ Ferramenta ${data.name} não encontrada, criando...`)
+                return {
+                  ...prev,
+                  tools: [...prev.tools, {
+                    name: data.name,
+                    displayName: data.displayName,
+                    description: `Ferramenta com erro`,
+                    status: 'error',
+                    error: data.error,
+                    isAdditional: data.isAdditional || false
+                  }]
+                }
+              }
+            })
+          })
+          
+          toolEventSource.addEventListener('additional_tools_requested', (event) => {
+            const data = JSON.parse(event.data)
+            console.log(`🔧 ${data.count} ferramenta(s) adicional(is) solicitada(s):`, data.tools)
+          })
 
-          // Adicionar resposta com resultado do tool
-          const aiMessage = {
-            id: Date.now().toString() + '_tool',
-            content: `✅ ${interpretation.toolDescription}\n\n${formatToolResult(toolResult.result)}`,
-            role: 'assistant',
-            created_at: new Date().toISOString()
+          // =====================================================
+          // EVENTOS DE STREAMING DE TEXTO
+          // =====================================================
+          
+          toolEventSource.addEventListener('text_start', (event) => {
+            const data = JSON.parse(event.data)
+            console.log('🎬 Iniciando streaming de texto:', data.message)
+            
+            // Começar a construir mensagem streamada
+            setMessages(prev => [...prev, {
+              id: `stream-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+              content: '',
+              role: 'assistant',
+              created_at: new Date().toISOString(),
+              isStreaming: true
+            }])
+          })
+          
+          toolEventSource.addEventListener('text_chunk', (event) => {
+            const data = JSON.parse(event.data)
+            console.log('📝 Chunk de texto:', data.content)
+            
+            // Atualizar mensagem com novo chunk
+            setMessages(prev => {
+              const newMessages = [...prev]
+              const lastMessage = newMessages[newMessages.length - 1]
+              
+              if (lastMessage && lastMessage.isStreaming) {
+                lastMessage.content = data.fullContent
+              }
+              
+              return newMessages
+            })
+          })
+          
+          toolEventSource.addEventListener('text_complete', (event) => {
+            const data = JSON.parse(event.data)
+            console.log('✅ Streaming de texto concluído')
+            
+            // Finalizar streaming
+            setMessages(prev => {
+              const newMessages = [...prev]
+              const lastMessage = newMessages[newMessages.length - 1]
+              
+              if (lastMessage && lastMessage.isStreaming) {
+                lastMessage.content = data.fullContent
+                lastMessage.isStreaming = false
+                console.log('✅ Streaming finalizado para mensagem:', lastMessage.id)
+              }
+              
+              return newMessages
+            })
+          })
+          
+          toolEventSource.addEventListener('text_error', (event) => {
+            const data = JSON.parse(event.data)
+            console.error('❌ Erro no streaming de texto:', data.error)
+          })
+          
+          toolEventSource.onerror = (error) => {
+            console.error('❌ Erro no SSE de ferramentas:', error)
           }
-
-          setMessages(prev => [...prev, aiMessage])
-        } else {
-          // Usuário negou permissão
-          const aiMessage = {
-            id: Date.now().toString() + '_denied',
-            content: '❌ Ação cancelada pelo usuário.',
-            role: 'assistant',
-            created_at: new Date().toISOString()
-          }
-
-          setMessages(prev => [...prev, aiMessage])
+          
+        } catch (sseError) {
+          console.error('❌ Erro ao conectar SSE:', sseError)
         }
-      } else {
-        // Comando normal - enviar para o chat tradicional
+        
+        // Fazer requisição POST tradicional em paralelo
         const response = await fetch(`/api/chat/${agentId}`, {
           method: 'POST',
           headers: {
@@ -305,22 +496,78 @@ const Chat = () => {
           },
           body: JSON.stringify({
             message: messageToSend,
-            conversationId: currentConversationId
+            conversationId: currentConversationId,
+            sessionId: sessionId  // Incluir sessionId para sincronizar com SSE
           })
         })
 
         if (response.ok) {
           const data = await response.json()
           
-          // Adicionar resposta da IA
-          const aiMessage = {
-            id: data.id,
-            content: data.content,
-            role: 'assistant',
-            created_at: data.timestamp
+          // Fechar conexão SSE
+          if (toolEventSource) {
+            toolEventSource.close()
+            console.log('🔌 SSE de ferramentas fechado')
           }
-
-          setMessages(prev => [...prev, aiMessage])
+          
+          // Manter histórico de ferramentas e marcar como inativo
+          let finalTools = []
+          setToolsExecution(prev => {
+            console.log('🔌 Estado das ferramentas ao fechar SSE:', prev.tools)
+            finalTools = prev.tools.length > 0 ? prev.tools : (data.toolsExecuted || [])
+            return {
+              isVisible: false, // Marca como inativo, mas mantém as ferramentas
+              tools: finalTools
+            }
+          })
+          
+          // Verificar se já existe uma mensagem streamada
+          let shouldCreateNewMessage = true
+          setMessages(prev => {
+            const lastMessage = prev[prev.length - 1]
+            
+            // Se última mensagem é assistant (streaming ou não), apenas atualizar com ferramentas
+            if (lastMessage && lastMessage.role === 'assistant') {
+              console.log('🔍 Verificando mensagem existente:', {
+                lastMessageContent: lastMessage.content,
+                dataContent: data.content,
+                isStreaming: lastMessage.isStreaming,
+                shouldUpdate: lastMessage.content === data.content || lastMessage.isStreaming
+              })
+              // Verificar se já tem o mesmo conteúdo para evitar duplicatas
+              if (lastMessage.content === data.content || lastMessage.isStreaming) {
+                lastMessage.toolsExecuted = finalTools
+                // Usar ID único baseado no timestamp + random para evitar duplicatas
+                lastMessage.id = `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+                if (lastMessage.isStreaming) {
+                  lastMessage.isStreaming = false // Finalizar streaming
+                }
+                shouldCreateNewMessage = false
+                console.log('🔧 Adicionando ferramentas à mensagem existente')
+                return [...prev]
+              }
+            }
+            
+            return prev
+          })
+          
+          // Aguardar um tick para garantir que o setState foi processado
+          await new Promise(resolve => setTimeout(resolve, 0))
+          
+          // Só criar nova mensagem se não houve streaming
+          if (shouldCreateNewMessage) {
+            console.log('🔧 Criando nova mensagem (sem streaming):', finalTools)
+            const aiMessage = {
+              id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+              content: data.content,
+              role: 'assistant',
+              created_at: data.timestamp,
+              toolsExecuted: finalTools
+            }
+            setMessages(prev => [...prev, aiMessage])
+          } else {
+            console.log('🔧 Mensagem já existia, não criando duplicata')
+          }
           
           // Se é uma nova conversa, atualizar o ID
           if (!currentConversationId && data.conversationId) {
@@ -343,6 +590,9 @@ const Chat = () => {
           setMessages(prev => prev.filter(msg => msg.id !== userMessage.id))
         }
       }
+
+      // Usar processamento híbrido: SSE para ferramentas + POST para resposta
+      await hybridProcessing()
     } catch (error) {
       console.error('Erro ao enviar mensagem:', error)
       toast.error('Erro ao enviar mensagem')
@@ -351,6 +601,11 @@ const Chat = () => {
       setMessages(prev => prev.filter(msg => msg.id !== userMessage.id))
     } finally {
       setSendingMessage(false)
+      // Ocultar indicador de ferramentas em caso de erro
+      setToolsExecution({
+        isVisible: false,
+        tools: []
+      })
     }
   }
 
@@ -387,192 +642,244 @@ const Chat = () => {
 
   if (!agent) {
     return (
-      <div className="flex items-center justify-center min-h-screen gradient-bg">
-        <div className="p-4 rounded-full bg-primary-600/20">
-          <Loader2 className="h-8 w-8 animate-spin text-primary-400" />
-        </div>
+      <div className="flex items-center justify-center min-h-screen bg-gray-50">
+        <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
       </div>
     )
   }
 
   return (
-    <div className="flex h-screen gradient-bg">
-      {/* Sidebar com conversas */}
-      <div className="w-80 sidebar glass-effect flex flex-col">
-        {/* Header */}
-        <div className="p-4 border-b border-dark-border">
-          <div className="flex items-center justify-between mb-4">
-            <button
-              onClick={() => navigate('/')}
-              className="flex items-center text-dark-secondary hover:text-dark-primary transition-colors duration-200"
-            >
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Voltar
-            </button>
-            <button
-              onClick={() => loadConversation(null)}
-              className="flex items-center text-primary-400 hover:text-primary-300 transition-colors duration-200"
-            >
-              <Plus className="h-4 w-4 mr-1" />
-              Nova
-            </button>
-          </div>
-          
-          <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 bg-primary-600/20 rounded-lg flex items-center justify-center">
-              <MessageSquare className="h-5 w-5 text-primary-400" />
+    <div className="flex h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-purple-900 text-gray-100">
+      {/* Sidebar com conversas - Dark Purple Style */}
+      <div className={`${sidebarOpen ? 'w-80' : 'w-0'} transition-all duration-300 bg-gradient-to-b from-gray-800 to-gray-900 border-r border-gray-700 flex flex-col overflow-hidden`}>
+        <div className="flex-1 flex flex-col min-w-0">
+          {/* Header da sidebar */}
+          <div className="p-4 border-b border-gray-700">
+            <div className="flex items-center justify-between mb-4">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => navigate('/')}
+                className="text-gray-300 hover:text-white hover:bg-gray-700"
+              >
+                <ArrowLeft className="h-4 w-4 mr-2" />
+                Voltar
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => loadConversation(null)}
+                className="text-purple-400 hover:text-purple-300 hover:bg-purple-900/30"
+              >
+                <Plus className="h-4 w-4 mr-1" />
+                Nova
+              </Button>
             </div>
-            <div>
-              <h2 className="font-semibold text-dark-primary">{agent.name}</h2>
-              <p className="text-sm text-dark-muted">Chat</p>
+            
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 bg-gradient-to-br from-purple-500 to-purple-700 rounded-lg flex items-center justify-center shadow-lg">
+                <Bot className="h-5 w-5 text-white" />
+              </div>
+              <div>
+                <h2 className="font-semibold text-white">{agent.name}</h2>
+                <p className="text-sm text-gray-400">Assistente IA</p>
+              </div>
             </div>
           </div>
-        </div>
 
-        {/* Lista de conversas */}
-        <div className="flex-1 overflow-y-auto">
-          {loadingConversations ? (
-            <div className="flex items-center justify-center p-4">
-              <Loader2 className="h-5 w-5 animate-spin text-dark-muted" />
-            </div>
-          ) : conversations.length === 0 ? (
-            <div className="p-4 text-center text-dark-muted">
-              <MessageSquare className="h-8 w-8 mx-auto mb-2 text-dark-border" />
-              <p>Nenhuma conversa ainda</p>
-              <p className="text-sm">Comece uma nova conversa!</p>
-            </div>
-          ) : (
-            <div className="p-2">
-              {conversations.map((conversation) => (
-                <div
-                  key={conversation.id}
-                  onClick={() => loadConversation(conversation.id)}
-                  className={`p-3 rounded-lg cursor-pointer transition-all duration-200 ${
-                    currentConversationId === conversation.id
-                      ? 'bg-primary-600/20 border border-primary-500/30 shadow-lg'
-                      : 'hover:bg-dark-tertiary border border-transparent hover:border-dark-border'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex-1 min-w-0">
-                      <h3 className={`font-medium truncate ${
-                        currentConversationId === conversation.id 
-                          ? 'text-dark-primary' 
-                          : 'text-dark-secondary'
-                      }`}>
-                        {conversation.title}
-                      </h3>
-                      <p className="text-sm text-dark-muted">
-                        {new Date(conversation.updated_at).toLocaleDateString('pt-BR')}
-                      </p>
-                    </div>
-                    <button
-                      onClick={(e) => deleteConversation(conversation.id, e)}
-                      className="text-dark-muted hover:text-red-400 p-1 transition-colors duration-200"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+          {/* Lista de conversas */}
+          <div className="flex-1 overflow-y-auto p-3">
+            {loadingConversations ? (
+              <div className="flex items-center justify-center p-6">
+                <Loader2 className="h-5 w-5 animate-spin text-purple-400" />
+              </div>
+            ) : conversations.length === 0 ? (
+              <div className="p-6 text-center text-gray-400">
+                <MessageSquare className="h-8 w-8 mx-auto mb-2 text-gray-500" />
+                <p className="text-sm">Nenhuma conversa ainda</p>
+                <p className="text-xs text-gray-500 mt-1">Comece uma nova conversa!</p>
+              </div>
+            ) : (
+              <div className="space-y-1">
+                {conversations.map((conversation) => (
+                  <Card
+                    key={conversation.id}
+                    className={`cursor-pointer transition-all duration-200 border-0 ${
+                      currentConversationId === conversation.id
+                        ? 'bg-gradient-to-r from-purple-900/50 to-purple-800/50 border border-purple-500/30'
+                        : 'bg-gray-800/50 hover:bg-gray-700/50 border border-transparent'
+                    }`}
+                    onClick={() => loadConversation(conversation.id)}
+                  >
+                    <CardContent className="p-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1 min-w-0">
+                          <h3 className={`font-medium truncate text-sm ${
+                            currentConversationId === conversation.id 
+                              ? 'text-purple-300' 
+                              : 'text-gray-300'
+                          }`}>
+                            {conversation.title}
+                          </h3>
+                          <p className="text-xs text-gray-500 mt-1">
+                            {new Date(conversation.updated_at).toLocaleDateString('pt-BR')}
+                          </p>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => deleteConversation(conversation.id, e)}
+                          className="text-gray-500 hover:text-red-400 hover:bg-red-900/30 p-1 h-6 w-6"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Área de chat */}
-      <div className="flex-1 flex flex-col">
-        {/* Header do chat */}
-        <div className="glass-effect border-b border-dark-border p-4">
-          <div className="flex items-center space-x-3">
-            <div className="w-8 h-8 bg-primary-600/20 rounded-lg flex items-center justify-center">
-              <MessageSquare className="h-4 w-4 text-primary-400" />
+                      {/* Área principal do chat */}
+        <div className="flex-1 flex flex-col">
+          {/* Header do chat */}
+          <div className="bg-gradient-to-r from-gray-800 to-gray-900 border-b border-gray-700">
+            <div className="flex items-center justify-between p-4">
+              <div className="flex items-center space-x-3">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setSidebarOpen(!sidebarOpen)}
+                  className="text-gray-300 hover:text-white hover:bg-gray-700"
+                >
+                  <Menu className="h-4 w-4" />
+                </Button>
+                <div className="flex items-center space-x-3">
+                  <div className="w-8 h-8 bg-gradient-to-br from-purple-500 to-purple-700 rounded-lg flex items-center justify-center shadow-lg">
+                    <Bot className="h-4 w-4 text-white" />
+                  </div>
+                  <div>
+                    <h1 className="text-white font-semibold">
+                      {currentConversationId ? 'Conversa em andamento' : 'Nova conversa'}
+                    </h1>
+                    <p className="text-gray-400 text-sm">
+                      {agent.description}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-gray-300 hover:text-white hover:bg-gray-700"
+              >
+                <Settings className="h-4 w-4" />
+              </Button>
             </div>
-            <div>
-              <h1 className="font-semibold text-dark-primary">
-                {currentConversationId ? 'Conversa em andamento' : 'Nova conversa'}
-              </h1>
-              <p className="text-sm text-dark-secondary">
-                {agent.description}
+          </div>
+
+                                   {/* Mensagens */}
+          <Conversation className="flex-1 bg-gradient-to-br from-gray-900 via-gray-800 to-purple-900/20">
+            <ConversationScrollButton />
+            <ConversationContent className="p-4">
+              {loading ? (
+                <div className="flex items-center justify-center h-full">
+                  <Loader2 className="h-6 w-6 animate-spin text-purple-400" />
+                </div>
+              ) : messages.length === 0 ? (
+                <div className="flex items-center justify-center h-full">
+                  <div className="text-center">
+                    <Bot className="h-12 w-12 mx-auto mb-4 text-gray-400" />
+                    <h3 className="text-lg font-medium text-white mb-2">
+                      Comece uma conversa
+                    </h3>
+                    <p className="text-gray-400">
+                      Envie uma mensagem para começar a conversar com {agent.name}
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {messages.map((message) => (
+                    <div key={message.id} className="mb-6">
+                      {/* Para mensagens da IA, mostrar sumário de ferramentas acima */}
+                      {message.role === 'assistant' && message.toolsExecuted && message.toolsExecuted.length > 0 && (
+                        <div className="flex justify-start mb-3">
+                          <ToolsSummary tools={message.toolsExecuted} />
+                        </div>
+                      )}
+                      
+                      <Message from={message.role}>
+                        <MessageContent className={`${
+                          message.role === 'user' 
+                            ? 'bg-gradient-to-r from-gray-800 to-gray-700 border border-gray-600 rounded-lg shadow-lg' 
+                            : 'bg-gradient-to-r from-gray-800 to-gray-700 rounded-lg shadow-lg'
+                        } p-4`}>
+                          <div className="text-gray-100 whitespace-pre-wrap leading-relaxed">
+                            {message.content}
+                          </div>
+                        </MessageContent>
+                      </Message>
+                    </div>
+                  ))}
+                  
+                  {/* Indicador de ferramentas em execução */}
+                  {toolsExecution.isVisible && toolsExecution.tools.length > 0 && (
+                    <div className="mb-4">
+                      <ToolsExecutionHistory 
+                        tools={toolsExecution.tools}
+                        isActive={true}
+                      />
+                    </div>
+                  )}
+                </>
+              )}
+              <div ref={messagesEndRef} />
+            </ConversationContent>
+          </Conversation>
+
+                                   {/* Input de mensagem - Dark Purple Style */}
+          <div className="bg-gradient-to-r from-gray-800 to-gray-900 border-t border-gray-700 p-4">
+            <div className="max-w-4xl mx-auto">
+              <div className="relative">
+                <textarea
+                  ref={inputRef}
+                  value={newMessage}
+                  onChange={(e) => setNewMessage(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault()
+                      sendMessage(e)
+                    }
+                  }}
+                  placeholder="Digite sua mensagem..."
+                  className="w-full p-3 pr-12 bg-gray-700 border border-gray-600 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-100 placeholder-gray-400"
+                  rows={1}
+                  disabled={sendingMessage}
+                  style={{ minHeight: '44px', maxHeight: '200px' }}
+                />
+                <Button
+                  onClick={sendMessage}
+                  disabled={!newMessage.trim() || sendingMessage}
+                  className="absolute right-2 top-1/2 transform -translate-y-1/2 bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white p-2 h-8 w-8 rounded-md disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
+                >
+                  {sendingMessage ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                    </svg>
+                  )}
+                </Button>
+              </div>
+              <p className="text-xs text-gray-400 mt-2 text-center">
+                {agent.name} pode cometer erros. Considere verificar informações importantes.
               </p>
             </div>
           </div>
-        </div>
-
-        {/* Mensagens */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {loading ? (
-            <div className="flex items-center justify-center h-full">
-              <div className="p-4 rounded-full bg-primary-600/20">
-                <Loader2 className="h-8 w-8 animate-spin text-primary-400" />
-              </div>
-            </div>
-          ) : messages.length === 0 ? (
-            <div className="flex items-center justify-center h-full">
-              <div className="text-center">
-                <MessageSquare className="h-12 w-12 mx-auto mb-4 text-dark-border" />
-                <h3 className="text-lg font-medium text-dark-primary mb-2">
-                  Comece uma conversa
-                </h3>
-                <p className="text-dark-secondary">
-                  Envie uma mensagem para começar a conversar com {agent.name}
-                </p>
-              </div>
-            </div>
-          ) : (
-            messages.map((message) => (
-              <div
-                key={message.id}
-                className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-              >
-                <div
-                  className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
-                    message.role === 'user'
-                      ? 'bg-primary-600 text-white shadow-lg'
-                      : 'bg-dark-card border border-dark-border text-dark-primary shadow-lg'
-                  }`}
-                >
-                  <p className="text-sm whitespace-pre-wrap">{message.content}</p>
-                  <p className={`text-xs mt-1 ${
-                    message.role === 'user' ? 'text-primary-200' : 'text-dark-muted'
-                  }`}>
-                    {new Date(message.created_at).toLocaleTimeString('pt-BR', {
-                      hour: '2-digit',
-                      minute: '2-digit'
-                    })}
-                  </p>
-                </div>
-              </div>
-            ))
-          )}
-          <div ref={messagesEndRef} />
-        </div>
-
-        {/* Input de mensagem */}
-        <div className="glass-effect border-t border-dark-border p-4">
-          <form onSubmit={sendMessage} className="flex space-x-4">
-            <input
-              ref={inputRef}
-              type="text"
-              value={newMessage}
-              onChange={(e) => setNewMessage(e.target.value)}
-              placeholder="Digite sua mensagem..."
-              className="flex-1 input-field"
-              disabled={sendingMessage}
-            />
-            <button
-              type="submit"
-              disabled={!newMessage.trim() || sendingMessage}
-              className="btn-primary px-4 py-2 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {sendingMessage ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Send className="h-4 w-4" />
-              )}
-            </button>
-          </form>
-        </div>
       </div>
 
       {/* Modal de permissão MCP */}

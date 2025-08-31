@@ -8,8 +8,8 @@ dotenv.config();
 
 const router = express.Router();
 
-// Configuração do Google AI
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+// Configuração do Google AI (usando Gemini)
+const genAI = new GoogleGenerativeAI(process.env.GOOGLE_AI_API_KEY || process.env.GEMINI_API_KEY || 'sua_google_ai_api_key_aqui');
 
 // Chave de criptografia
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'your-secret-key-32-chars-long!';
