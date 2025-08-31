@@ -2,6 +2,10 @@ import express from 'express'
 import { authenticateToken } from './auth.js'
 import { supabase } from '../config/supabase.js'
 import OpenAI from 'openai'
+import dotenv from 'dotenv'
+
+// Carregar variáveis de ambiente
+dotenv.config()
 
 // Configurar OpenAI
 const openai = new OpenAI({

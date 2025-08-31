@@ -7,6 +7,10 @@ import { fileURLToPath } from 'url'
 import { authenticateToken } from './auth.js'
 import { supabase, STORAGE_BUCKET } from '../config/supabase.js'
 import OpenAI from 'openai'
+import dotenv from 'dotenv'
+
+// Carregar variáveis de ambiente
+dotenv.config()
 
 // Configurar OpenAI
 const openai = new OpenAI({
