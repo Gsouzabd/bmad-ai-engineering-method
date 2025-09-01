@@ -20,6 +20,7 @@ import knowledgeBaseRoutes from './routes/knowledgeBase.js'
 import credentialsRoutes from './routes/credentials.js'
 import mcpToolsRoutes from './routes/mcp-tools.js'
 import oauthRoutes from './routes/oauth.js'
+import woocommerceRoutes from './routes/woocommerce.js'
 
 const app = express()
 const PORT = process.env.PORT || 5000
@@ -59,6 +60,7 @@ app.use('/api/knowledge-base', knowledgeBaseRoutes)
 app.use('/api/credentials', credentialsRoutes)
 app.use('/api/mcp', mcpToolsRoutes)
 app.use('/api/oauth', oauthRoutes)
+app.use('/api/woocommerce', woocommerceRoutes)
 
 // Rota de health check
 app.get('/api/health', (req, res) => {
