@@ -11,6 +11,9 @@ dotenv.config()
 import { google } from 'googleapis'
 import CryptoJS from 'crypto-js'
 
+// Importar integração MCP WooCommerce
+import WooCommerceMCPIntegration from '../mcp-woocommerce-integration.js'
+
 // Configurar OpenAI
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || 'sua_openai_api_key_aqui'
@@ -18,6 +21,9 @@ const openai = new OpenAI({
 
 // Chave de criptografia para credenciais
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'your-secret-key-32-chars-long!'
+
+// Armazenar instâncias MCP WooCommerce por usuário
+const woocommerceMCPInstances = new Map()
 
 // Função para descriptografar dados
 const decrypt = (ciphertext) => {
@@ -46,27 +52,111 @@ const getUserCredentials = async (userId) => {
   }
 }
 
+// Função para obter credenciais WooCommerce do usuário
+const getWooCommerceCredentials = async (userId) => {
+  const { data, error } = await supabase
+    .from('woocommerce_credentials')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('is_valid', true)
+    .single()
+
+  if (error || !data) {
+    throw new Error('Credenciais WooCommerce não encontradas ou inválidas')
+  }
+
+  return data
+}
+
+// Função para obter ou criar instância MCP WooCommerce
+const getWooCommerceMCPInstance = async (userId) => {
+  if (!woocommerceMCPInstances.has(userId)) {
+    const mcpIntegration = new WooCommerceMCPIntegration()
+    await mcpIntegration.startMCPServer(userId)
+    woocommerceMCPInstances.set(userId, mcpIntegration)
+  }
+  
+  return woocommerceMCPInstances.get(userId)
+}
+
 // Função para executar ferramentas MCP
 const executeMCPTool = async (toolName, params, userId) => {
   try {
-    // Obter credenciais do usuário
-    const credentials = await getUserCredentials(userId)
-    
-    switch (toolName) {
-      case 'gdrive_list_files':
-        return await executeGDriveListFiles(credentials, params)
-      case 'gdrive_read_file':
-        return await executeGDriveReadFile(credentials, params)
-      case 'sheets_read_values':
-        return await executeSheetsReadValues(credentials, params)
-      case 'sheets_write_values':
-        return await executeSheetsWriteValues(credentials, params)
-      default:
-        throw new Error(`Ferramenta não suportada: ${toolName}`)
+    // Verificar se é uma ferramenta WooCommerce
+    if (toolName.startsWith('woocommerce_')) {
+      return await executeWooCommerceTool(toolName, params, userId)
     }
+    
+    // Verificar se é uma ferramenta Google
+    if (toolName.startsWith('gdrive_') || toolName.startsWith('sheets_')) {
+      const credentials = await getUserCredentials(userId)
+      
+      switch (toolName) {
+        case 'gdrive_list_files':
+          return await executeGDriveListFiles(credentials, params)
+        case 'gdrive_read_file':
+          return await executeGDriveReadFile(credentials, params)
+        case 'sheets_read_values':
+          return await executeSheetsReadValues(credentials, params)
+        case 'sheets_write_values':
+          return await executeSheetsWriteValues(credentials, params)
+        default:
+          throw new Error(`Ferramenta Google não suportada: ${toolName}`)
+      }
+    }
+    
+    throw new Error(`Ferramenta não suportada: ${toolName}`)
   } catch (error) {
     console.error(`❌ Erro ao executar ferramenta MCP ${toolName}:`, error)
     throw error
+  }
+}
+
+// Função para executar ferramentas WooCommerce
+const executeWooCommerceTool = async (toolName, params, userId) => {
+  try {
+    const mcpInstance = await getWooCommerceMCPInstance(userId)
+    
+    // Mapear nomes de ferramentas para métodos MCP
+    const toolMapping = {
+      'woocommerce_get_products': 'get_products',
+      'woocommerce_get_product': 'get_product',
+      'woocommerce_create_product': 'create_product',
+      'woocommerce_update_product': 'update_product',
+      'woocommerce_delete_product': 'delete_product',
+      'woocommerce_get_orders': 'get_orders',
+      'woocommerce_get_order': 'get_order',
+      'woocommerce_create_order': 'create_order',
+      'woocommerce_update_order': 'update_order',
+      'woocommerce_delete_order': 'delete_order',
+      'woocommerce_get_customers': 'get_customers',
+      'woocommerce_get_customer': 'get_customer',
+      'woocommerce_create_customer': 'create_customer',
+      'woocommerce_update_customer': 'update_customer',
+      'woocommerce_delete_customer': 'delete_customer',
+      'woocommerce_get_sales_report': 'get_sales_report',
+      'woocommerce_get_products_report': 'get_products_report',
+      'woocommerce_get_orders_report': 'get_orders_report',
+      'woocommerce_get_categories_report': 'get_categories_report'
+    }
+    
+    const mcpMethod = toolMapping[toolName]
+    if (!mcpMethod) {
+      throw new Error(`Ferramenta WooCommerce não suportada: ${toolName}`)
+    }
+    
+    // Executar comando MCP
+    const result = await mcpInstance.sendRequest(mcpMethod, params)
+    
+    return {
+      success: true,
+      tool: toolName,
+      result: result,
+      timestamp: new Date().toISOString()
+    }
+    
+  } catch (error) {
+    throw new Error(`Erro ao executar ferramenta WooCommerce ${toolName}: ${error.message}`)
   }
 }
 
@@ -415,6 +505,7 @@ async function buildRAGContext(userMessage, agentId, userId) {
  * Definir ferramentas MCP para OpenAI Function Calling
  */
 const getMCPTools = () => [
+  // GOOGLE DRIVE E SHEETS
   {
     type: "function",
     function: {
@@ -503,13 +594,276 @@ const getMCPTools = () => [
         required: ["spreadsheetId", "range", "values"]
       }
     }
+  },
+  
+  // WOOCOMMERCE - PRODUTOS
+  {
+    type: "function",
+    function: {
+      name: "woocommerce_get_products",
+      description: "Lista produtos da loja WooCommerce",
+      parameters: {
+        type: "object",
+        properties: {
+          perPage: {
+            type: "number",
+            description: "Número de produtos por página (padrão: 20)"
+          },
+          page: {
+            type: "number",
+            description: "Número da página (padrão: 1)"
+          },
+          category: {
+            type: "string",
+            description: "ID da categoria para filtrar produtos"
+          },
+          status: {
+            type: "string",
+            description: "Status do produto (publish, draft, pending, private)"
+          }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "woocommerce_get_product",
+      description: "Obtém detalhes de um produto específico",
+      parameters: {
+        type: "object",
+        properties: {
+          productId: {
+            type: "string",
+            description: "ID do produto"
+          }
+        },
+        required: ["productId"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "woocommerce_create_product",
+      description: "Cria um novo produto na loja",
+      parameters: {
+        type: "object",
+        properties: {
+          name: {
+            type: "string",
+            description: "Nome do produto"
+          },
+          type: {
+            type: "string",
+            description: "Tipo do produto (simple, grouped, external, variable)"
+          },
+          regular_price: {
+            type: "string",
+            description: "Preço regular do produto"
+          },
+          description: {
+            type: "string",
+            description: "Descrição completa do produto"
+          },
+          short_description: {
+            type: "string",
+            description: "Descrição curta do produto"
+          },
+          categories: {
+            type: "array",
+            description: "Array de categorias do produto",
+            items: {
+              type: "object",
+              properties: {
+                id: {
+                  type: "string",
+                  description: "ID da categoria"
+                }
+              }
+            }
+          }
+        },
+        required: ["name", "type", "regular_price"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "woocommerce_update_product",
+      description: "Atualiza um produto existente",
+      parameters: {
+        type: "object",
+        properties: {
+          productId: {
+            type: "string",
+            description: "ID do produto a ser atualizado"
+          },
+          name: {
+            type: "string",
+            description: "Novo nome do produto"
+          },
+          regular_price: {
+            type: "string",
+            description: "Novo preço regular"
+          },
+          description: {
+            type: "string",
+            description: "Nova descrição"
+          }
+        },
+        required: ["productId"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "woocommerce_delete_product",
+      description: "Deleta um produto da loja",
+      parameters: {
+        type: "object",
+        properties: {
+          productId: {
+            type: "string",
+            description: "ID do produto a ser deletado"
+          }
+        },
+        required: ["productId"]
+      }
+    }
+  },
+  
+  // WOOCOMMERCE - PEDIDOS
+  {
+    type: "function",
+    function: {
+      name: "woocommerce_get_orders",
+      description: "Lista pedidos da loja WooCommerce",
+      parameters: {
+        type: "object",
+        properties: {
+          perPage: {
+            type: "number",
+            description: "Número de pedidos por página (padrão: 20)"
+          },
+          page: {
+            type: "number",
+            description: "Número da página (padrão: 1)"
+          },
+          status: {
+            type: "string",
+            description: "Status do pedido (processing, completed, cancelled, etc.)"
+          }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "woocommerce_get_order",
+      description: "Obtém detalhes de um pedido específico",
+      parameters: {
+        type: "object",
+        properties: {
+          orderId: {
+            type: "string",
+            description: "ID do pedido"
+          }
+        },
+        required: ["orderId"]
+      }
+    }
+  },
+  
+  // WOOCOMMERCE - CLIENTES
+  {
+    type: "function",
+    function: {
+      name: "woocommerce_get_customers",
+      description: "Lista clientes da loja WooCommerce",
+      parameters: {
+        type: "object",
+        properties: {
+          perPage: {
+            type: "number",
+            description: "Número de clientes por página (padrão: 20)"
+          },
+          page: {
+            type: "number",
+            description: "Número da página (padrão: 1)"
+          }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "woocommerce_get_customer",
+      description: "Obtém detalhes de um cliente específico",
+      parameters: {
+        type: "object",
+        properties: {
+          customerId: {
+            type: "string",
+            description: "ID do cliente"
+          }
+        },
+        required: ["customerId"]
+      }
+    }
+  },
+  
+  // WOOCOMMERCE - RELATÓRIOS
+  {
+    type: "function",
+    function: {
+      name: "woocommerce_get_sales_report",
+      description: "Obtém relatório de vendas da loja",
+      parameters: {
+        type: "object",
+        properties: {
+          dateMin: {
+            type: "string",
+            description: "Data mínima para o relatório (formato: YYYY-MM-DD)"
+          },
+          dateMax: {
+            type: "string",
+            description: "Data máxima para o relatório (formato: YYYY-MM-DD)"
+          }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "woocommerce_get_products_report",
+      description: "Obtém relatório de produtos da loja",
+      parameters: {
+        type: "object",
+        properties: {
+          dateMin: {
+            type: "string",
+            description: "Data mínima para o relatório (formato: YYYY-MM-DD)"
+          },
+          dateMax: {
+            type: "string",
+            description: "Data máxima para o relatório (formato: YYYY-MM-DD)"
+          }
+        }
+      }
+    }
   }
 ]
 
 /**
  * Gera resposta usando OpenAI com contexto RAG e MCP tools com SSE
  */
-async function generateAIResponseWithSSE(prompt, message, ragContext = null, userId = null, agentId = null, sendEvent) {
+async function generateAIResponseWithSSE(prompt, message, ragContext = null, userId = null, agentId = null, sendEvent, conversationHistory = []) {
   try {
     // Construir o prompt do sistema
     let systemPrompt = prompt
@@ -538,11 +892,33 @@ NOTA: Não há documentos específicos carregados na base de conhecimento para e
     systemPrompt += `
 
 FERRAMENTAS DISPONÍVEIS:
-Você tem acesso às seguintes ferramentas do Google:
+
+GOOGLE (Drive e Sheets):
 - gdrive_list_files: Para listar arquivos do Google Drive
 - gdrive_read_file: Para ler o conteúdo de um arquivo específico do Google Drive (requer fileId)
 - sheets_read_values: Para ler dados de planilhas Google Sheets (requer spreadsheetId VÁLIDO)
 - sheets_write_values: Para escrever dados em planilhas Google Sheets
+
+WOOCOMMERCE (Loja Online):
+- woocommerce_get_products: Para listar produtos da loja
+- woocommerce_get_product: Para obter detalhes de um produto específico (requer productId)
+- woocommerce_create_product: Para criar um novo produto
+- woocommerce_update_product: Para atualizar um produto existente (requer productId)
+- woocommerce_delete_product: Para deletar um produto (requer productId)
+- woocommerce_get_orders: Para listar pedidos da loja
+- woocommerce_get_order: Para obter detalhes de um pedido específico (requer orderId)
+- woocommerce_create_order: Para criar um novo pedido
+- woocommerce_update_order: Para atualizar um pedido existente (requer orderId)
+- woocommerce_delete_order: Para deletar um pedido (requer orderId)
+- woocommerce_get_customers: Para listar clientes da loja
+- woocommerce_get_customer: Para obter detalhes de um cliente específico (requer customerId)
+- woocommerce_create_customer: Para criar um novo cliente
+- woocommerce_update_customer: Para atualizar um cliente existente (requer customerId)
+- woocommerce_delete_customer: Para deletar um cliente (requer customerId)
+- woocommerce_get_sales_report: Para obter relatório de vendas
+- woocommerce_get_products_report: Para obter relatório de produtos
+- woocommerce_get_orders_report: Para obter relatório de pedidos
+- woocommerce_get_categories_report: Para obter relatório de categorias
 
 REGRAS OBRIGATÓRIAS:
 
@@ -600,6 +976,18 @@ REGRAS OBRIGATÓRIAS:
    - Exemplo: 5581982408541 → DDD 81 (Recife), 5519999054433 → DDD 19 (Campinas)
    - SEMPRE verifique CUIDADOSAMENTE os DDDs antes de categorizar
 
+6. WOOCOMMERCE (LOJA ONLINE):
+   - Para produtos: use woocommerce_get_products para listar, woocommerce_get_product para detalhes
+   - Para pedidos: use woocommerce_get_orders para listar, woocommerce_get_order para detalhes
+   - Para clientes: use woocommerce_get_customers para listar, woocommerce_get_customer para detalhes
+   - Para relatórios: use woocommerce_get_sales_report, woocommerce_get_products_report, etc.
+   - SEMPRE use IDs válidos quando especificados (productId, orderId, customerId)
+   - Para criar/atualizar: forneça todos os dados necessários no formato correto
+   - Para deletar: confirme a ação e use o ID correto
+   - Use woocommerce_get_products com parâmetros como perPage, page, category, status
+   - Use woocommerce_get_orders com parâmetros como perPage, page, status
+   - Use woocommerce_get_customers com parâmetros como perPage, page
+
 Use essas ferramentas SOMENTE quando necessário e com parâmetros VÁLIDOS.`
 
     // Construir array de mensagens com histórico
@@ -611,7 +999,7 @@ Use essas ferramentas SOMENTE quando necessário e com parâmetros VÁLIDOS.`
     ]
 
     // Adicionar histórico da conversa (se existir)
-    if (conversationHistory.length > 0) {
+    if (conversationHistory && conversationHistory.length > 0) {
       console.log(`💭 Incluindo ${conversationHistory.length} mensagens do histórico`)
       conversationHistory.forEach(msg => {
         messages.push({
@@ -619,6 +1007,24 @@ Use essas ferramentas SOMENTE quando necessário e com parâmetros VÁLIDOS.`
           content: msg.content
         })
       })
+      
+      // Adicionar instrução específica para manter contexto
+      systemPrompt += `
+
+IMPORTANTE - CONTEXTO DA CONVERSA:
+Você tem acesso ao histórico desta conversa. Use essas informações para:
+- Manter referência aos IDs de planilhas e arquivos já mencionados
+- Continuar operações iniciadas anteriormente
+- Evitar pedir informações já fornecidas
+- Manter consistência nas referências a arquivos e planilhas
+
+REGRAS CRÍTICAS PARA PLANILHAS:
+- SEMPRE use os IDs de planilhas já mencionados na conversa
+- NUNCA invente novos IDs ou use nomes de arquivos como IDs
+- Se precisar de um ID, use gdrive_list_files primeiro para obter a lista atualizada
+- Mantenha o contexto: se o usuário disse "essa planilha", use o ID da conversa anterior`
+    } else {
+      console.log('💭 Nenhum histórico de conversa disponível')
     }
 
     // Adicionar mensagem atual do usuário
@@ -628,11 +1034,11 @@ Use essas ferramentas SOMENTE quando necessário e com parâmetros VÁLIDOS.`
     })
 
     const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: 'gpt-4o',
       messages: messages,
       tools: getMCPTools(),
       tool_choice: "auto",
-      max_tokens: 1000,
+      max_tokens: 5000,
       temperature: 0.7
     })
 
@@ -1428,11 +1834,27 @@ router.get('/:agentId/stream', async (req, res) => {
       sendEvent('rag_not_found', { message: 'Nenhum contexto RAG encontrado' })
     }
 
+    // Buscar histórico de mensagens da conversa atual (se existir)
+    let conversationHistory = []
+    if (currentConversationId) {
+      const { data: messages } = await supabase
+        .from('messages')
+        .select('content, role, created_at')
+        .eq('conversation_id', currentConversationId)
+        .order('created_at', { ascending: true })
+        .limit(20) // Limitar últimas 20 mensagens para não sobrecarregar
+      
+      if (messages && messages.length > 0) {
+        conversationHistory = messages
+        console.log(`💭 Histórico encontrado: ${messages.length} mensagens`)
+      }
+    }
+
     // Gerar resposta da IA com streaming
     sendEvent('ai_generating', { message: 'Gerando resposta da IA...' })
     
     // Modificar a função generateAIResponse para usar SSE
-    const aiResponse = await generateAIResponseWithSSE(agent.prompt, message, ragContext, actualUserId, agentId, sendEvent)
+    const aiResponse = await generateAIResponseWithSSE(agent.prompt, message, ragContext, actualUserId, agentId, sendEvent, conversationHistory)
 
     // Criar ou usar conversa existente
     let currentConversationId = conversationId
